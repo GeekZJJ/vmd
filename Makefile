@@ -29,6 +29,7 @@ tap: $(BUILD_DIR)/tap
 $(BUILD_DIR)/tap : $(BUILD_DIR)/tap.o
 	@mkdir -p $(@D)
 	$(CC) $(TAP_LDFLAGS) $^ -o $@
+	$(SIGN) --entitlements networking.entitlements --force -s - $@
 
 -include $(DEP)
 
