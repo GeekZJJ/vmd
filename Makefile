@@ -6,7 +6,7 @@ FFLAGS = -framework Foundation -framework Virtualization -framework vmnet
 BUILD_DIR = objs
 BIN = vmctl
 
-SRCS = main.m compat/reallocarray.m compat/fmt_scaled.m vm.m vmd.m config.m
+SRCS = main.m compat/reallocarray.m compat/fmt_scaled.m vm.m vmd.m config.m vmnet.m
 
 OBJ = $(SRCS:%.m=$(BUILD_DIR)/%.o)
 DEP = $(OBJ:%.o=%.d)

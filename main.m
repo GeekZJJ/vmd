@@ -98,8 +98,10 @@ main(int argc, char *argv[])
 	optreset = 1;
 	optind = 1;
 
-	if (argc < 1)
+	if (argc < 1) {
 		usage();
+		return -EINVAL;
+	}
 
 
   if (sigsetjmp(jmpbuf, 1) != 0) {
@@ -123,6 +125,7 @@ parse(int argc, char *argv[])
 	int			 i;
 
 	memset(&res, 0, sizeof(res));
+	res.nets = [[NSMutableArray alloc] init];
 	res.nifs = -1;
 
 	for (i = 0; ctl_commands[i].name != NULL; i++) {
@@ -192,7 +195,7 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 			break;
 		case 'n':
 			if (parse_net(res, optarg) != 0)
-				errx(1, "invalid disk: %s", optarg);
+				errx(1, "invalid net: %s", optarg);
 			break;
 		case 'm':
 			if (res->size)
@@ -360,34 +363,57 @@ parse_disk(struct parse_result *res, char *word, int type)
 	return (0);
 }
 
+bool check_interface_bridgeable(NSString *ifacename) {
+	NSArray *hostInterfaces = VZBridgedNetworkInterface.networkInterfaces;
+	for (VZBridgedNetworkInterface *hostIface in hostInterfaces)
+		if ([hostIface.identifier isEqualToString: ifacename]) {
+			return true;
+		}
+	return false;
+}
+
 int
 parse_net(struct parse_result *res, char *word)
 {
-	char		**nets;
-	char		*s;
-	
-	if (!strncmp(word, "bridge", sizeof("bridge"))) {
-		char *ret = strstr(word, "@");
-		if (strlen(ret)<2) {
+	VZMACAddress *addr = NULL;
+	void *data;
+	net_type_t type = NET_TYPE_ERROR;
+	NSString *param = [NSString stringWithUTF8String:word];
+	NSArray *ss = [param componentsSeparatedByString:@"#"];
+	NSLog(@"net: %@",ss);
+	if (ss.count!=2 && ss.count!=1) return -1;
+	if ([param hasPrefix:@"bridge"]) {
+		NSArray *ss2 = [ss[0] componentsSeparatedByString:@"@"]; 
+		if (ss2.count!=2) return -1; 
+		if (!check_interface_bridgeable(ss2[1])) {
+			NSLog(@"interface %@ is not bridgeable", ss2[1]);
 			return -1;
 		}
-		// todo 判断接口有效性
-	} else if (strcmp(word, "nat") && strcmp(word, "host")) {
+		type = NET_TYPE_BRIDGE;
+		data = ss2[1];
+	} else if ([param hasPrefix:@"nat"]) {
+		type = NET_TYPE_NAT;
+	} else if ([param hasPrefix:@"host"]) {
+		type = NET_TYPE_HOST_ONLY;
+	}
+	if (type==NET_TYPE_ERROR) {
+		NSLog(@"%@ is not a valid net type", ss[0]);
 		return -1;
 	}
-
-	if ((nets = reallocarray(res->nets, res->nnets + 1,
-	    sizeof(char *))) == NULL) {
-		warn("reallocarray");
-		return (-1);
+	if (ss.count==2) {
+		addr = [[VZMACAddress alloc] initWithString:ss[1]];
+		if (!addr) {
+			NSLog(@"%@ is not a valid mac address", ss[1]);
+			return -1;
+		}
+	} else {
+		addr = [VZMACAddress randomLocallyAdministeredAddress];
 	}
-	if ((s = strdup(word)) == NULL) {
-		warn("strdup");
-		return (-1);
-	}
-	nets[res->nnets] = s;
-	res->nets = nets;
-	res->nnets++;
+	net_desc_t *net = malloc(sizeof(net_desc_t));
+	net->type = type;
+	net->macaddr = addr;
+	net->data = data;
+	[res->nets addObject:[NSValue value:&net withObjCType:@encode(net_desc_t *)]];
 
 	return (0);
 }
