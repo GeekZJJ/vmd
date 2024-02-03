@@ -20,7 +20,6 @@
 #import <Foundation/Foundation.h>
 #import <Virtualization/Virtualization.h>
 
-#include <string.h>
 #include <stdio.h>
 #include <err.h>
 #include <sys/stat.h>

@@ -1,7 +1,7 @@
 SIGN   = codesign
 CC     = clang
 CFLAGS = -mtune=native -O2 -Wall
-FFLAGS = -framework Foundation -framework Virtualization
+FFLAGS = -framework Foundation -framework Virtualization -framework vmnet
 
 BUILD_DIR = objs
 BIN = vmctl
