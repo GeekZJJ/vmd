@@ -43,6 +43,12 @@ struct ctl_command ctl_commands[] = {
 	{ NULL }
 };
 
+static sigjmp_buf jmpbuf;
+static void signalhandler(int signal) {
+  printf("\nReceived signal %d\n", signal);
+  siglongjmp(jmpbuf, 1);
+}
+
 __dead void
 usage(void)
 {
@@ -95,7 +101,18 @@ main(int argc, char *argv[])
 	if (argc < 1)
 		usage();
 
+
+  if (sigsetjmp(jmpbuf, 1) != 0) {
+    goto done;
+  }
+  signal(SIGHUP, signalhandler);
+  signal(SIGINT, signalhandler);
+  signal(SIGTERM, signalhandler);
+  signal(SIGPIPE, signalhandler);
+
 	return (parse(argc, argv));
+done:
+	return 0;
 }
 
 int
