@@ -20,6 +20,7 @@
 #import <Foundation/Foundation.h>
 #import <Virtualization/Virtualization.h>
 
+#include <string.h>
 #include <stdio.h>
 #include <err.h>
 #include <sys/stat.h>
@@ -141,9 +142,9 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 	char		 path[PATH_MAX];
 
 #ifdef WITH_EFI
-  #define CTL_START_OPT "b:k:i:d:m:p:l:cE"
+  #define CTL_START_OPT "n:b:k:i:d:m:p:l:cE"
 #else
-  #define CTL_START_OPT "b:k:i:d:m:p:l:c"
+  #define CTL_START_OPT "n:b:k:i:d:m:p:l:c"
 #endif
 	while ((ch = getopt(argc, argv, CTL_START_OPT)) != -1) {
 		switch (ch) {
@@ -171,6 +172,10 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 			if (realpath(optarg, path) == NULL)
 				err(1, "invalid disk path");
 			if (parse_disk(res, path, type) != 0)
+				errx(1, "invalid disk: %s", optarg);
+			break;
+		case 'n':
+			if (parse_net(res, optarg) != 0)
 				errx(1, "invalid disk: %s", optarg);
 			break;
 		case 'm':
@@ -339,6 +344,38 @@ parse_disk(struct parse_result *res, char *word, int type)
 	return (0);
 }
 
+int
+parse_net(struct parse_result *res, char *word)
+{
+	char		**nets;
+	char		*s;
+	
+	if (!strncmp(word, "bridge", sizeof("bridge"))) {
+		char *ret = strstr(word, "@");
+		if (strlen(ret)<2) {
+			return -1;
+		}
+		// todo 判断接口有效性
+	} else if (strcmp(word, "nat") && strcmp(word, "host")) {
+		return -1;
+	}
+
+	if ((nets = reallocarray(res->nets, res->nnets + 1,
+	    sizeof(char *))) == NULL) {
+		warn("reallocarray");
+		return (-1);
+	}
+	if ((s = strdup(word)) == NULL) {
+		warn("strdup");
+		return (-1);
+	}
+	nets[res->nnets] = s;
+	res->nets = nets;
+	res->nnets++;
+
+	return (0);
+}
+
 __dead void
 ctl_openconsole(struct vmconfig *vmcfg)
 {
@@ -349,3 +386,23 @@ ctl_openconsole(struct vmconfig *vmcfg)
 		(char *)NULL);
 	err(1, "failed to open the console");
 }
+
+/*
+$ ls -alh /var/spool/uucp
+total 0
+drwxr-xr-x  2 _uucp  wheel    64B  7 26 21:03 .
+drwxr-xr-x  6 root   wheel   192B  1  1  2020 ..
+
+$ sudo chmod 775 /var/spool/uucp/
+$ sudo chgrp staff /var/spool/uucp/
+
+$ ls -alh /var/spool/uucp
+total 0
+drwxrwxr-x  2 _uucp  staff    64B  7 26 21:03 .
+drwxr-xr-x  6 root   wheel   192B  1  1  2020 ..
+
+
+sudo ./tap
+./vmctl -v start -cb openwrt/bzImage -d openwrt/openwrt-x86-64-generic-ext4-rootfs.img -k "console=hvc0 root=/dev/vda rootwait noinitrd" -p 1 -m 1g -n nat -n host openwrt
+*/
+

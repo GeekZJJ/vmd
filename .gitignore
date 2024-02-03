@@ -1,4 +1,5 @@
-*/*.o
-*.o
+compile_commands.json
 vmctl
-vmd
+tap
+objs
+openwrt
