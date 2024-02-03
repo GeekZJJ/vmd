@@ -1,4 +1,4 @@
-*/*.o
-*.o
+objs
 vmctl
 vmd
+openwrt

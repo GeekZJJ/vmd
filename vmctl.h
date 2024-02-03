@@ -21,6 +21,8 @@
 #ifndef VMCTL_PARSER_H
 #define VMCTL_PARSER_H
 
+#include <Foundation/Foundation.h>
+#include <Virtualization/Virtualization.h>
 
 #define VMCTL_CU	"/usr/bin/cu"
 
@@ -47,6 +49,19 @@ enum actions {
 
 struct ctl_command;
 
+typedef enum {
+	NET_TYPE_ERROR = -1,
+	NET_TYPE_HOST_ONLY,
+	NET_TYPE_BRIDGE,
+	NET_TYPE_NAT,
+} net_type_t;
+
+typedef struct {
+	net_type_t type;
+	VZMACAddress *macaddr;
+	void *data;
+} net_desc_t;
+
 struct parse_result {
 	enum actions		 action;
 	NSString		*kernelpath;
@@ -61,8 +76,7 @@ struct parse_result {
 	char			*isopath;
 	long long		 size;
 	int			 nifs;
-	char			**nets;
-	int			 nnets;
+	NSMutableArray *nets;
 	size_t			 ndisks;
 	char			**disks;
 	int			*disktypes;
@@ -101,6 +115,7 @@ int	 parse_network(struct parse_result *, char *);
 int	 parse_size(struct parse_result *, char *);
 int	 parse_disktype(const char *, const char **);
 int	 parse_disk(struct parse_result *, char *, int);
+int  parse_net(struct parse_result *, char *);
 int	 parse_vmid(struct parse_result *, char *, int);
 int	 parse_instance(struct parse_result *, char *);
 void	 parse_free(struct parse_result *);
@@ -113,6 +128,8 @@ int	vmcfg_init(struct parse_result *, struct vmconfig *);
 int	vmcfg_vhw(struct parse_result *, VZVirtualMachineConfiguration *);
 int	vmcfg_boot(struct parse_result *, VZVirtualMachineConfiguration *);
 int	vmcfg_net(struct parse_result *, VZVirtualMachineConfiguration *);
+int	vmcfg_net_host(struct parse_result *, VZVirtualMachineConfiguration *);
+int	vmcfg_net_bridged(struct parse_result *, VZVirtualMachineConfiguration *);
 int	vmcfg_storage(struct parse_result *, VZVirtualMachineConfiguration *);
 int	vmcfg_console(struct parse_result *, struct vmconfig *);
 int	vmcfg_misc(struct parse_result *, VZVirtualMachineConfiguration *);

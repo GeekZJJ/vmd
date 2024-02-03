@@ -26,6 +26,7 @@
 #include <sys/tty.h>
 #include "vmctl.h"
 #include "vmd.h"
+#include "vmnet.h"
 
 
 int
@@ -193,16 +194,17 @@ err:
 	return (-1);
 }
 
-/* TODO: Allow multiple network devices */
-int
-vmcfg_net(struct parse_result *res, VZVirtualMachineConfiguration *vmcfg)
-{
-	NSError *error = nil;
-	NSArray *ndevs = @[];
-	VZMACAddress *lladdr;
+VZBridgedNetworkInterface *get_bridge_interface(NSString *ifacename) {
+	NSArray *hostInterfaces = VZBridgedNetworkInterface.networkInterfaces;
+	for (VZBridgedNetworkInterface *hostIface in hostInterfaces)
+		if ([hostIface.identifier isEqualToString: ifacename]) {
+			return hostIface;
+		}
+	return nil;
+}
 
-	/* VirtIO network device */
-	VZVirtioNetworkDeviceConfiguration *vio0 = [
+int netdev_add_nat(NSArray **ndevs, VZMACAddress* macaddr) {
+	VZVirtioNetworkDeviceConfiguration *vnet = [
 		[VZVirtioNetworkDeviceConfiguration alloc]
 		init
 	];
@@ -210,37 +212,142 @@ vmcfg_net(struct parse_result *res, VZVirtualMachineConfiguration *vmcfg)
 		[VZNATNetworkDeviceAttachment alloc]
 		init
 	];
+	[vnet setMACAddress:macaddr];
+	[vnet setAttachment:nat];
+	*ndevs = [*ndevs arrayByAddingObject:vnet];
+	return 0;
+}
 
-	if (res->lladdr != NULL) {
-		lladdr = [
-			[VZMACAddress alloc]
-			initWithString:res->lladdr
-		];
-	} else {
-		lladdr = [VZMACAddress randomLocallyAdministeredAddress];
+int netdev_add_bridge(NSArray **ndevs, NSString *ifacename, VZMACAddress *macaddr) {
+	VZBridgedNetworkInterface *brInterface = get_bridge_interface(ifacename);
+	if (!brInterface) {
+		NSLog(@"Network interface '%@' not found or not available", ifacename);
+		return -1;
 	}
-
-	if (lladdr == NULL) {
-		NSLog(@"Unable to assign link layer address to vio0");
-		goto done;
+	NSLog(@" + Bridged network to %@", brInterface);
+	VZNetworkDeviceAttachment *bridged = [[VZBridgedNetworkDeviceAttachment alloc] initWithInterface:brInterface];
+	if (!bridged) {
+		NSLog(@"Bridged network to %@ failed", brInterface);
+		return -1;
 	}
+	/* VirtIO network device */
+	VZVirtioNetworkDeviceConfiguration *vnet = [
+		[VZVirtioNetworkDeviceConfiguration alloc]
+		init
+	];
+	[vnet setMACAddress:macaddr];
+	[vnet setAttachment:bridged];
+	*ndevs = [*ndevs arrayByAddingObject:vnet];
+	return (0);
+}
 
-	[vio0 setMACAddress:lladdr];
-	[vio0 setAttachment:nat];
-	ndevs = [ndevs arrayByAddingObject:vio0];
+int set_socket_buflen(int fd, int sndbuflen, int rcvbuflen) {
+    /* according to VZFileHandleNetworkDeviceAttachment docs SO_RCVBUF has to be
+        at least double of SO_SNDBUF, ideally 4x. Modern macOS have kern.ipc.maxsockbuf
+        of 8Mb, so we try 2Mb + 6Mb first and fall back by halving */
+    while (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuflen, sizeof(sndbuflen)) ||
+            setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuflen, sizeof(rcvbuflen))) {
+        sndbuflen /= 2;
+        rcvbuflen /= 2;
+        if (rcvbuflen < 128 * 1024) {
+            printf("Could not set socket buffer sizes: %s\n", strerror(errno));
+            return -1;
+        }
+    }
+	return 0;
+}
+
+int netdev_add_hostonly(NSArray **ndevs, VZMACAddress *macaddr) {
+  int mtu = 1500;
+  NSFileHandle *fh;
+
+  int socket_fds[2];
+  if (socketpair(AF_UNIX, SOCK_DGRAM, 0, socket_fds) < 0) {
+    NSLog(@"Could not create socket pair");
+    return -1;
+  }
+  int sndbuflen = 2 * 1024 * 1024;
+  int rcvbuflen = 6 * 1024 * 1024;
+  set_socket_buflen(socket_fds[0], sndbuflen, rcvbuflen);
+  set_socket_buflen(socket_fds[1], sndbuflen, rcvbuflen);
+  printf("socketpair %d %d\n", socket_fds[0], socket_fds[1]);
+  if (!setup_vmnet(socket_fds[1], "44381771-A145-4499-B6DB-4678C93726B2")) {
+    NSLog(@"setup_vmnet failed");
+	goto out;
+  }
+  fh = [[NSFileHandle alloc] initWithFileDescriptor:socket_fds[0]];
+  VZFileHandleNetworkDeviceAttachment *host =
+      [[VZFileHandleNetworkDeviceAttachment alloc] initWithFileHandle:fh];
+  if (mtu > 1500) {
+#if (TARGET_OS_OSX && __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000)
+    if (@available(macOS 13, *))
+            host.maximumTransmissionUnit = mtu;
+    else
+            fprintf(stderr, "WARNING: your macOS does not support MTU changes, "
+                            "using default 1500\n");
+#else
+    fprintf(stderr, "WARNING: This build does not support MTU changes, using "
+                    "default 1500\n");
+#endif
+  }
+
+  /* VirtIO network device */
+  VZVirtioNetworkDeviceConfiguration *vnet =
+      [[VZVirtioNetworkDeviceConfiguration alloc] init];
+  [vnet setMACAddress:macaddr];
+  [vnet setAttachment:host];
+  *ndevs = [*ndevs arrayByAddingObject:vnet];
+  return (0);
+out:
+  close(socket_fds[0]);
+  close(socket_fds[1]);
+  return -1;
+}
+
+int
+vmcfg_net(struct parse_result *res, VZVirtualMachineConfiguration *vmcfg)
+{
+	NSArray *ndevs = @[];
+
+	/* VirtIO network device */
+	for (NSValue *net in res->nets) {
+		net_desc_t *nd = [net pointerValue];
+		if (!nd) {
+			NSLog(@"nd==NULL");
+			return -1;
+		}
+		NSLog(@"nd==%d", (nd)->type);
+		// NSLog(@"nd==%d,%@,%@", nd->type, nd->macaddr, nd->data);
+		switch (nd->type) {
+			case NET_TYPE_BRIDGE:
+				NSLog(@"Add bridge net to %@", nd->data);
+				if (netdev_add_bridge(&ndevs, nd->data, nd->macaddr)) {
+					NSLog(@"Add bridge net to %@ failed", nd->data);
+					return -1;
+				}
+				break;
+			case NET_TYPE_NAT:
+				NSLog(@"Add nat net");
+				if (netdev_add_nat(&ndevs, nd->macaddr)) {
+					NSLog(@"Add nat net failed");
+					return -1;
+				}
+				break;
+			case NET_TYPE_HOST_ONLY:
+				NSLog(@"Add host-only net");
+				if (netdev_add_hostonly(&ndevs, nd->macaddr)) {
+					NSLog(@"Add host-only net failed");
+					return -1;
+				}
+				break;
+			default:
+				return -1;
+		}
+	}
+	NSLog(@"Add %zu net", (unsigned long)ndevs.count);
 
 	[vmcfg setNetworkDevices:ndevs];
-	if (error)
-		goto err;
-
-	if (verbose > 1)
-		NSLog(@"Assigned link layer address %@ to vio0", lladdr);
-
 	return (0);
-err:
-	NSLog(@"Unable to configure network device: %@", error);
-done:
-	return (-1);
 }
 
 int

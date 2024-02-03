@@ -2,20 +2,30 @@
 
 SIGN   = codesign
 CC     = clang
-PROG   = vmctl
-OBJS   = main.o compat/reallocarray.o compat/fmt_scaled.o \
-	 vm.o vmd.o config.o
 CFLAGS = -mtune=native -O2 -Wall
-FFLAGS = -framework Foundation -framework Virtualization
+FFLAGS = -framework Foundation -framework Virtualization -framework vmnet
 
+BUILD_DIR = objs
+BIN = vmctl
 
-all:	vmctl sign
+SRCS = main.m compat/reallocarray.m compat/fmt_scaled.m vm.m vmd.m config.m vmnet.m
 
-vmctl:	$(OBJS)
-	$(CC) $(CFLAGS) $(FFLAGS) -o $@ $^
+OBJ = $(SRCS:%.m=$(BUILD_DIR)/%.o)
+DEP = $(OBJ:%.o=%.d)
 
-sign:	vmctl
-	$(SIGN) --entitlements hypervisor.entitlements --force -s - $<
+all: $(BIN)
 
-clean:
-	rm -f *.o compat/*.o vmctl
+$(BIN) : $(OBJ)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(FFLAGS) $^ -o $@
+	$(SIGN) --entitlements hypervisor.entitlements --force -s - $@
+
+-include $(DEP)
+
+$(BUILD_DIR)/%.o : %.m
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -MMD -c $< -o $@
+
+.PHONY : clean release
+clean :
+	-rm -fr $(BUILD_DIR)/*

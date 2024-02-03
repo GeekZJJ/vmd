@@ -15,14 +15,13 @@ make
 ### Run
 To start the VM in verbose mode:
 ```
-./vmctl -v start -cb vmlinuz \
-	-i initrd.gz \
-	-k "console=hvc0 root=/dev/vda" \
-	-d disk.img \
-	-l 01:23:45:67:89:ab \
+./vmctl -v start -cb openwrt/bzImage \
+	-k "console=hvc0 root=/dev/vda rootwait noinitrd" \
+	-d openwrt/openwrt-x86-64-generic-ext4-rootfs.img \
 	-m 1g \
 	-p 1 \
-	vm_name
+	-n nat -n host \
+	openwrt
 ```
 
 This will automatically spawn a new console session to interact with the guest.
@@ -41,9 +40,19 @@ Keep repeating the signal to forcefully shutdown the VM.
 The program cu is used to facilitate the console. When the -c flag has been used
 with vmctl, then the console will automatically open. The uucp directory must be
 writable, which can be fixed with:
-```
-sudo chmod 775 /var/spool/uucp/
-sudo chgrp staff /var/spool/uucp/
+``` shell
+$ ls -alh /var/spool/uucp
+total 0
+drwxr-xr-x  2 _uucp  wheel    64B  7 26 21:03 .
+drwxr-xr-x  6 root   wheel   192B  1  1  2020 ..
+
+$ sudo chmod 775 /var/spool/uucp/
+$ sudo chgrp staff /var/spool/uucp/
+
+$ ls -alh /var/spool/uucp
+total 0
+drwxrwxr-x  2 _uucp  staff    64B  7 26 21:03 .
+drwxr-xr-x  6 root   wheel   192B  1  1  2020 ..
 ```
 
 If cu doesn't respond to ~ commands, make sure to enter CTRL+D first.

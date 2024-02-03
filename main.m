@@ -43,6 +43,12 @@ struct ctl_command ctl_commands[] = {
 	{ NULL }
 };
 
+static sigjmp_buf jmpbuf;
+static void signalhandler(int signal) {
+  printf("\nReceived signal %d\n", signal);
+  siglongjmp(jmpbuf, 1);
+}
+
 __dead void
 usage(void)
 {
@@ -92,10 +98,23 @@ main(int argc, char *argv[])
 	optreset = 1;
 	optind = 1;
 
-	if (argc < 1)
+	if (argc < 1) {
 		usage();
+		return -EINVAL;
+	}
+
+
+  if (sigsetjmp(jmpbuf, 1) != 0) {
+    goto done;
+  }
+  signal(SIGHUP, signalhandler);
+  signal(SIGINT, signalhandler);
+  signal(SIGTERM, signalhandler);
+  signal(SIGPIPE, signalhandler);
 
 	return (parse(argc, argv));
+done:
+	return 0;
 }
 
 int
@@ -106,6 +125,7 @@ parse(int argc, char *argv[])
 	int			 i;
 
 	memset(&res, 0, sizeof(res));
+	res.nets = [[NSMutableArray alloc] init];
 	res.nifs = -1;
 
 	for (i = 0; ctl_commands[i].name != NULL; i++) {
@@ -141,9 +161,9 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 	char		 path[PATH_MAX];
 
 #ifdef WITH_EFI
-  #define CTL_START_OPT "b:k:i:d:m:p:l:cE"
+  #define CTL_START_OPT "n:b:k:i:d:m:p:l:cE"
 #else
-  #define CTL_START_OPT "b:k:i:d:m:p:l:c"
+  #define CTL_START_OPT "n:b:k:i:d:m:p:l:c"
 #endif
 	while ((ch = getopt(argc, argv, CTL_START_OPT)) != -1) {
 		switch (ch) {
@@ -172,6 +192,10 @@ ctl_start(struct parse_result *res, int argc, char *argv[])
 				err(1, "invalid disk path");
 			if (parse_disk(res, path, type) != 0)
 				errx(1, "invalid disk: %s", optarg);
+			break;
+		case 'n':
+			if (parse_net(res, optarg) != 0)
+				errx(1, "invalid net: %s", optarg);
 			break;
 		case 'm':
 			if (res->size)
@@ -335,6 +359,61 @@ parse_disk(struct parse_result *res, char *word, int type)
 	res->disks = disks;
 	res->disktypes = disktypes;
 	res->ndisks++;
+
+	return (0);
+}
+
+bool check_interface_bridgeable(NSString *ifacename) {
+	NSArray *hostInterfaces = VZBridgedNetworkInterface.networkInterfaces;
+	for (VZBridgedNetworkInterface *hostIface in hostInterfaces)
+		if ([hostIface.identifier isEqualToString: ifacename]) {
+			return true;
+		}
+	return false;
+}
+
+int
+parse_net(struct parse_result *res, char *word)
+{
+	VZMACAddress *addr = NULL;
+	void *data;
+	net_type_t type = NET_TYPE_ERROR;
+	NSString *param = [NSString stringWithUTF8String:word];
+	NSArray *ss = [param componentsSeparatedByString:@"#"];
+	NSLog(@"net: %@",ss);
+	if (ss.count!=2 && ss.count!=1) return -1;
+	if ([param hasPrefix:@"bridge"]) {
+		NSArray *ss2 = [ss[0] componentsSeparatedByString:@"@"]; 
+		if (ss2.count!=2) return -1; 
+		if (!check_interface_bridgeable(ss2[1])) {
+			NSLog(@"interface %@ is not bridgeable", ss2[1]);
+			return -1;
+		}
+		type = NET_TYPE_BRIDGE;
+		data = ss2[1];
+	} else if ([param hasPrefix:@"nat"]) {
+		type = NET_TYPE_NAT;
+	} else if ([param hasPrefix:@"host"]) {
+		type = NET_TYPE_HOST_ONLY;
+	}
+	if (type==NET_TYPE_ERROR) {
+		NSLog(@"%@ is not a valid net type", ss[0]);
+		return -1;
+	}
+	if (ss.count==2) {
+		addr = [[VZMACAddress alloc] initWithString:ss[1]];
+		if (!addr) {
+			NSLog(@"%@ is not a valid mac address", ss[1]);
+			return -1;
+		}
+	} else {
+		addr = [VZMACAddress randomLocallyAdministeredAddress];
+	}
+	net_desc_t *net = malloc(sizeof(net_desc_t));
+	net->type = type;
+	net->macaddr = addr;
+	net->data = data;
+	[res->nets addObject:[NSValue value:&net withObjCType:@encode(net_desc_t *)]];
 
 	return (0);
 }
